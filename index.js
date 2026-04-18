@@ -1,47 +1,81 @@
 const express = require('express');
 const cors = require('cors');
+const mongoose = require("mongoose");
 
 const app = express();
+
 app.use(cors());
 app.use(express.json());
+
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("MongoDB connected"))
+  .catch(err => console.log("MongoDB error:", err));
+
+const taskSchema = new mongoose.Schema({
+  text: String,
+  status: {
+    type: String,
+    default: "pending"
+  }
+});
+
+const Task = mongoose.model("Task", taskSchema);
+
+// ROUTES
 
 // Test route
 app.get('/', (req, res) => {
   res.send("UBD360 API is running");
 });
 
-// Simple tasks storage (temporary)
-let tasks = [];
+// CREATE task
+app.post('/tasks', async (req, res) => {
+  try {
+    const task = new Task({
+      text: req.body.text
+    });
 
-// Add task
-app.post('/tasks', (req, res) => {
-  const task = {
-    id: Date.now(),
-    text: req.body.text,
-    status: "pending"
-  };
-  tasks.push(task);
-  res.json(task);
+    await task.save();
+    res.json(task);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// Get tasks
-app.get('/tasks', (req, res) => {
-  res.json(tasks);
+// GET all tasks
+app.get('/tasks', async (req, res) => {
+  try {
+    const tasks = await Task.find();
+    res.json(tasks);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// Update task
-app.put('/tasks/:id', (req, res) => {
-  tasks = tasks.map(t =>
-    t.id == req.params.id ? { ...t, status: req.body.status } : t
-  );
-  res.json({ message: "Task updated" });
+// UPDATE task status
+app.put('/tasks/:id', async (req, res) => {
+  try {
+    await Task.findByIdAndUpdate(req.params.id, {
+      status: req.body.status
+    });
+
+    res.json({ message: "Task updated" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// Delete task
-app.delete('/tasks', (req, res) => {
-  tasks = [];
-  res.json({ message: "All tasks cleared" });
+// DELETE ALL tasks
+app.delete('/tasks', async (req, res) => {
+  try {
+    await Task.deleteMany({});
+    res.json({ message: "All tasks cleared" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
+
+// START SERVER
 
 const PORT = process.env.PORT || 3000;
 

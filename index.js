@@ -37,7 +37,12 @@ app.put('/tasks/:id', (req, res) => {
   res.json({ message: "Task updated" });
 });
 
-// IMPORTANT: PORT for Render
+// Delete task
+app.delete('/tasks', (req, res) => {
+  tasks = [];
+  res.json({ message: "All tasks cleared" });
+});
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {

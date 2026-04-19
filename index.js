@@ -12,7 +12,7 @@ app.use(express.json());
 /* -----------------------------
    CONFIG
 ------------------------------*/
-const JWT_SECRET = "SECRET_KEY"; // later you can move this to env
+const JWT_SECRET = "SECRET_KEY";
 
 /* -----------------------------
    CONNECT TO MONGODB
@@ -25,7 +25,7 @@ mongoose.connect(process.env.MONGO_URI)
    SCHEMAS
 ------------------------------*/
 
-// USER SCHEMA
+// USER
 const userSchema = new mongoose.Schema({
   username: String,
   password: String,
@@ -33,7 +33,7 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model("User", userSchema);
 
-// TASK SCHEMA
+// TASK
 const taskSchema = new mongoose.Schema({
   text: String,
   status: {
@@ -44,13 +44,32 @@ const taskSchema = new mongoose.Schema({
 });
 const Task = mongoose.model("Task", taskSchema);
 
-// SCHEDULE SCHEMA
+// SCHEDULE
 const scheduleSchema = new mongoose.Schema({
   title: String,
   date: String,
   group: String
 });
 const Schedule = mongoose.model("Schedule", scheduleSchema);
+
+// 🔥 LOG SYSTEM (NEW)
+const logSchema = new mongoose.Schema({
+  action: String,
+  user: String,
+  time: {
+    type: Date,
+    default: Date.now
+  }
+});
+const Log = mongoose.model("Log", logSchema);
+
+/* -----------------------------
+   HELPERS
+------------------------------*/
+
+async function addLog(action, user) {
+  await Log.create({ action, user });
+}
 
 /* -----------------------------
    AUTH MIDDLEWARE
@@ -73,12 +92,12 @@ function auth(req, res, next) {
    ROUTES
 ------------------------------*/
 
-// Test route
+// TEST
 app.get('/', (req, res) => {
   res.send("UBD360 API is running");
 });
 
-/* ---------- AUTH ROUTES ---------- */
+/* ---------- AUTH ---------- */
 
 // REGISTER
 app.post('/register', async (req, res) => {
@@ -92,8 +111,8 @@ app.post('/register', async (req, res) => {
     });
 
     await user.save();
-    res.json({ message: "User registered" });
 
+    res.json({ message: "User registered" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -123,9 +142,9 @@ app.post('/login', async (req, res) => {
   }
 });
 
-/* ---------- TASK ROUTES ---------- */
+/* ---------- TASKS ---------- */
 
-// CREATE task (PROTECTED)
+// CREATE TASK
 app.post('/tasks', auth, async (req, res) => {
   try {
     const task = new Task({
@@ -134,13 +153,16 @@ app.post('/tasks', auth, async (req, res) => {
     });
 
     await task.save();
+
+    await addLog("Created task: " + req.body.text, req.user.role);
+
     res.json(task);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET tasks by group (PROTECTED)
+// GET TASKS BY GROUP
 app.get('/tasks/:group', auth, async (req, res) => {
   try {
     const tasks = await Task.find({ group: req.params.group });
@@ -150,12 +172,14 @@ app.get('/tasks/:group', auth, async (req, res) => {
   }
 });
 
-// UPDATE task (PROTECTED)
+// UPDATE TASK
 app.put('/tasks/:id', auth, async (req, res) => {
   try {
     await Task.findByIdAndUpdate(req.params.id, {
       status: req.body.status
     });
+
+    await addLog("Updated task status", req.user.role);
 
     res.json({ message: "Task updated" });
   } catch (err) {
@@ -163,19 +187,28 @@ app.put('/tasks/:id', auth, async (req, res) => {
   }
 });
 
-// DELETE all tasks (PROTECTED)
+// 🔥 RESET SYSTEM (TASKS + SCHEDULES)
 app.delete('/tasks', auth, async (req, res) => {
   try {
+    // OPTIONAL: admin-only
+    if (req.user.role !== "Staff") {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
     await Task.deleteMany({});
-    res.json({ message: "All tasks cleared" });
+    await Schedule.deleteMany({});
+
+    await addLog("System reset (tasks + schedules cleared)", req.user.role);
+
+    res.json({ message: "All data cleared" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-/* ---------- SCHEDULE ROUTES ---------- */
+/* ---------- SCHEDULE ---------- */
 
-// CREATE schedule (PROTECTED)
+// CREATE
 app.post('/schedule', auth, async (req, res) => {
   try {
     const item = new Schedule({
@@ -185,17 +218,35 @@ app.post('/schedule', auth, async (req, res) => {
     });
 
     await item.save();
+
+    await addLog("Added schedule: " + req.body.title, req.user.role);
+
     res.json(item);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET schedule (PROTECTED)
+// GET BY GROUP
 app.get('/schedule/:group', auth, async (req, res) => {
   try {
     const items = await Schedule.find({ group: req.params.group });
     res.json(items);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ---------- LOGS (ADMIN) ---------- */
+
+app.get('/logs', auth, async (req, res) => {
+  try {
+    if (req.user.role !== "Staff") {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const logs = await Log.find().sort({ time: -1 });
+    res.json(logs);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

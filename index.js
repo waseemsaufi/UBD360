@@ -10,7 +10,7 @@ app.use(cors());
 app.use(express.json());
 
 /* ---------------- CONFIG ---------------- */
-const JWT_SECRET = "SECRET_KEY"; // move to env in production
+const JWT_SECRET = "SECRET_KEY";
 
 /* ---------------- MONGO CONNECT ---------------- */
 mongoose.connect(process.env.MONGO_URI)
@@ -32,7 +32,7 @@ const taskSchema = new mongoose.Schema({
   text: String,
   status: { type: String, default: "pending" },
   group: String
-}, { timestamps: true }); // ✅ IMPORTANT FIX
+}, { timestamps: true });
 const Task = mongoose.model("Task", taskSchema);
 
 // SCHEDULE
@@ -40,8 +40,20 @@ const scheduleSchema = new mongoose.Schema({
   title: String,
   date: String,
   group: String
-}, { timestamps: true }); // ✅ IMPORTANT FIX
+}, { timestamps: true });
 const Schedule = mongoose.model("Schedule", scheduleSchema);
+
+// RESOURCE ✅ NEW
+const resourceSchema = new mongoose.Schema({
+  name: String,
+  quantity: Number,
+  status: {
+    type: String,
+    default: "available"
+  },
+  group: String
+}, { timestamps: true });
+const Resource = mongoose.model("Resource", resourceSchema);
 
 // LOGS
 const logSchema = new mongoose.Schema({
@@ -61,14 +73,12 @@ async function addLog(action, user) {
   }
 }
 
-/* ---------------- AUTH MIDDLEWARE ---------------- */
+/* ---------------- AUTH ---------------- */
 
 function auth(req, res, next) {
   const token = req.headers.authorization;
 
-  if (!token) {
-    return res.status(401).json({ error: "No token provided" });
-  }
+  if (!token) return res.status(401).json({ error: "No token" });
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
@@ -79,13 +89,13 @@ function auth(req, res, next) {
   }
 }
 
-/* ---------------- ROUTES ---------------- */
+/* ---------------- TEST ---------------- */
 
 app.get('/', (req, res) => {
   res.send("UBD360 API running");
 });
 
-/* ---------------- AUTH ---------------- */
+/* ---------------- AUTH ROUTES ---------------- */
 
 // REGISTER
 app.post('/register', async (req, res) => {
@@ -132,17 +142,16 @@ app.post('/login', async (req, res) => {
 
 /* ---------------- TASKS ---------------- */
 
-// CREATE TASK
+// CREATE
 app.post('/tasks', auth, async (req, res) => {
   try {
     const task = new Task({
       text: req.body.text,
-      group: req.body.group?.trim(), // ✅ FIX GROUP BUG
+      group: req.body.group?.trim(),
       status: "pending"
     });
 
     await task.save();
-
     await addLog(`Created task: ${req.body.text}`, req.user.role);
 
     res.json(task);
@@ -151,11 +160,10 @@ app.post('/tasks', auth, async (req, res) => {
   }
 });
 
-// GET TASKS BY GROUP
+// GET BY GROUP
 app.get('/tasks/:group', auth, async (req, res) => {
   try {
-    const group = req.params.group.trim(); // ✅ FIX
-
+    const group = req.params.group.trim();
     const tasks = await Task.find({ group });
 
     res.json(tasks);
@@ -164,34 +172,16 @@ app.get('/tasks/:group', auth, async (req, res) => {
   }
 });
 
-// UPDATE TASK STATUS
+// UPDATE
 app.put('/tasks/:id', auth, async (req, res) => {
   try {
     await Task.findByIdAndUpdate(req.params.id, {
       status: req.body.status
     });
 
-    await addLog("Updated task status", req.user.role);
+    await addLog("Updated task", req.user.role);
 
     res.json({ message: "Task updated" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// RESET SYSTEM (ADMIN ONLY)
-app.delete('/tasks', auth, async (req, res) => {
-  try {
-    if (req.user.role !== "Staff") {
-      return res.status(403).json({ error: "Access denied" });
-    }
-
-    await Task.deleteMany({});
-    await Schedule.deleteMany({});
-
-    await addLog("System reset", req.user.role);
-
-    res.json({ message: "System cleared" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -209,7 +199,6 @@ app.post('/schedule', auth, async (req, res) => {
     });
 
     await item.save();
-
     await addLog(`Added schedule: ${req.body.title}`, req.user.role);
 
     res.json(item);
@@ -218,14 +207,105 @@ app.post('/schedule', auth, async (req, res) => {
   }
 });
 
-// GET BY GROUP
+// GET
 app.get('/schedule/:group', auth, async (req, res) => {
   try {
     const group = req.params.group.trim();
-
     const items = await Schedule.find({ group });
 
     res.json(items);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ---------------- RESOURCES ✅ ---------------- */
+
+// CREATE
+app.post('/resources', auth, async (req, res) => {
+  try {
+    const resource = new Resource({
+      name: req.body.name,
+      quantity: req.body.quantity,
+      group: req.body.group?.trim(),
+      status: "available"
+    });
+
+    await resource.save();
+    await addLog(`Added resource: ${req.body.name}`, req.user.role);
+
+    res.json(resource);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET BY GROUP
+app.get('/resources/:group', auth, async (req, res) => {
+  try {
+    const group = req.params.group.trim();
+    const resources = await Resource.find({ group });
+
+    res.json(resources);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// UPDATE (USE / RESTOCK)
+app.put('/resources/:id', auth, async (req, res) => {
+  try {
+    const resource = await Resource.findById(req.params.id);
+
+    if (!resource) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    const amount = req.body.amount || 1;
+
+    if (req.body.action === "used") {
+      resource.quantity -= amount;
+    } else {
+      resource.quantity += amount;
+    }
+
+    if (resource.quantity < 0) resource.quantity = 0;
+
+    // AUTO STATUS
+    if (resource.quantity === 0) {
+      resource.status = "out";
+    } else if (resource.quantity <= 3) {
+      resource.status = "low";
+    } else {
+      resource.status = "available";
+    }
+
+    await resource.save();
+
+    await addLog(`Updated resource: ${resource.name}`, req.user.role);
+
+    res.json(resource);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ---------------- ADMIN ---------------- */
+
+// RESET SYSTEM
+app.delete('/tasks', auth, async (req, res) => {
+  try {
+    if (req.user.role !== "Staff") {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    await Task.deleteMany({});
+    await Schedule.deleteMany({});
+    await Resource.deleteMany({}); // ✅ FIX
+
+    await addLog("System reset", req.user.role);
+
+    res.json({ message: "System cleared" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -263,16 +343,11 @@ app.get('/analytics', auth, async (req, res) => {
       { $group: { _id: "$group", count: { $sum: 1 } } }
     ]);
 
-    const schedulesByGroup = await Schedule.aggregate([
-      { $group: { _id: "$group", count: { $sum: 1 } } }
-    ]);
-
     res.json({
       totalTasks,
       completedTasks,
       pendingTasks,
-      tasksByGroup,
-      schedulesByGroup
+      tasksByGroup
     });
 
   } catch (err) {
@@ -280,7 +355,7 @@ app.get('/analytics', auth, async (req, res) => {
   }
 });
 
-/* ---------------- START SERVER ---------------- */
+/* ---------------- START ---------------- */
 
 const PORT = process.env.PORT || 3000;
 

@@ -9,21 +9,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* -----------------------------
-   CONFIG
-------------------------------*/
-const JWT_SECRET = "SECRET_KEY";
+/* ---------------- CONFIG ---------------- */
+const JWT_SECRET = "SECRET_KEY"; // move to env in production
 
-/* -----------------------------
-   CONNECT TO MONGODB
-------------------------------*/
+/* ---------------- MONGO CONNECT ---------------- */
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected"))
   .catch(err => console.log("MongoDB error:", err));
 
-/* -----------------------------
-   SCHEMAS
-------------------------------*/
+/* ---------------- SCHEMAS ---------------- */
 
 // USER
 const userSchema = new mongoose.Schema({
@@ -36,12 +30,9 @@ const User = mongoose.model("User", userSchema);
 // TASK
 const taskSchema = new mongoose.Schema({
   text: String,
-  status: {
-    type: String,
-    default: "pending"
-  },
+  status: { type: String, default: "pending" },
   group: String
-});
+}, { timestamps: true }); // ✅ IMPORTANT FIX
 const Task = mongoose.model("Task", taskSchema);
 
 // SCHEDULE
@@ -49,35 +40,35 @@ const scheduleSchema = new mongoose.Schema({
   title: String,
   date: String,
   group: String
-});
+}, { timestamps: true }); // ✅ IMPORTANT FIX
 const Schedule = mongoose.model("Schedule", scheduleSchema);
 
-// 🔥 LOG SYSTEM (NEW)
+// LOGS
 const logSchema = new mongoose.Schema({
   action: String,
   user: String,
-  time: {
-    type: Date,
-    default: Date.now
-  }
+  time: { type: Date, default: Date.now }
 });
 const Log = mongoose.model("Log", logSchema);
 
-/* -----------------------------
-   HELPERS
-------------------------------*/
+/* ---------------- HELPERS ---------------- */
 
 async function addLog(action, user) {
-  await Log.create({ action, user });
+  try {
+    await Log.create({ action, user });
+  } catch (err) {
+    console.log("Log error:", err.message);
+  }
 }
 
-/* -----------------------------
-   AUTH MIDDLEWARE
-------------------------------*/
+/* ---------------- AUTH MIDDLEWARE ---------------- */
+
 function auth(req, res, next) {
   const token = req.headers.authorization;
 
-  if (!token) return res.status(401).json({ error: "No token" });
+  if (!token) {
+    return res.status(401).json({ error: "No token provided" });
+  }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
@@ -88,16 +79,13 @@ function auth(req, res, next) {
   }
 }
 
-/* -----------------------------
-   ROUTES
-------------------------------*/
+/* ---------------- ROUTES ---------------- */
 
-// TEST
 app.get('/', (req, res) => {
-  res.send("UBD360 API is running");
+  res.send("UBD360 API running");
 });
 
-/* ---------- AUTH ---------- */
+/* ---------------- AUTH ---------------- */
 
 // REGISTER
 app.post('/register', async (req, res) => {
@@ -142,19 +130,20 @@ app.post('/login', async (req, res) => {
   }
 });
 
-/* ---------- TASKS ---------- */
+/* ---------------- TASKS ---------------- */
 
 // CREATE TASK
 app.post('/tasks', auth, async (req, res) => {
   try {
     const task = new Task({
       text: req.body.text,
-      group: req.body.group
+      group: req.body.group?.trim(), // ✅ FIX GROUP BUG
+      status: "pending"
     });
 
     await task.save();
 
-    await addLog("Created task: " + req.body.text, req.user.role);
+    await addLog(`Created task: ${req.body.text}`, req.user.role);
 
     res.json(task);
   } catch (err) {
@@ -165,14 +154,17 @@ app.post('/tasks', auth, async (req, res) => {
 // GET TASKS BY GROUP
 app.get('/tasks/:group', auth, async (req, res) => {
   try {
-    const tasks = await Task.find({ group: req.params.group });
+    const group = req.params.group.trim(); // ✅ FIX
+
+    const tasks = await Task.find({ group });
+
     res.json(tasks);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// UPDATE TASK
+// UPDATE TASK STATUS
 app.put('/tasks/:id', auth, async (req, res) => {
   try {
     await Task.findByIdAndUpdate(req.params.id, {
@@ -187,10 +179,9 @@ app.put('/tasks/:id', auth, async (req, res) => {
   }
 });
 
-// 🔥 RESET SYSTEM (TASKS + SCHEDULES)
+// RESET SYSTEM (ADMIN ONLY)
 app.delete('/tasks', auth, async (req, res) => {
   try {
-    // OPTIONAL: admin-only
     if (req.user.role !== "Staff") {
       return res.status(403).json({ error: "Access denied" });
     }
@@ -198,15 +189,15 @@ app.delete('/tasks', auth, async (req, res) => {
     await Task.deleteMany({});
     await Schedule.deleteMany({});
 
-    await addLog("System reset (tasks + schedules cleared)", req.user.role);
+    await addLog("System reset", req.user.role);
 
-    res.json({ message: "All data cleared" });
+    res.json({ message: "System cleared" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-/* ---------- SCHEDULE ---------- */
+/* ---------------- SCHEDULE ---------------- */
 
 // CREATE
 app.post('/schedule', auth, async (req, res) => {
@@ -214,12 +205,12 @@ app.post('/schedule', auth, async (req, res) => {
     const item = new Schedule({
       title: req.body.title,
       date: req.body.date,
-      group: req.body.group
+      group: req.body.group?.trim()
     });
 
     await item.save();
 
-    await addLog("Added schedule: " + req.body.title, req.user.role);
+    await addLog(`Added schedule: ${req.body.title}`, req.user.role);
 
     res.json(item);
   } catch (err) {
@@ -230,14 +221,17 @@ app.post('/schedule', auth, async (req, res) => {
 // GET BY GROUP
 app.get('/schedule/:group', auth, async (req, res) => {
   try {
-    const items = await Schedule.find({ group: req.params.group });
+    const group = req.params.group.trim();
+
+    const items = await Schedule.find({ group });
+
     res.json(items);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-/* ---------- LOGS (ADMIN) ---------- */
+/* ---------------- LOGS ---------------- */
 
 app.get('/logs', auth, async (req, res) => {
   try {
@@ -246,15 +240,48 @@ app.get('/logs', auth, async (req, res) => {
     }
 
     const logs = await Log.find().sort({ time: -1 });
+
     res.json(logs);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-/* -----------------------------
-   START SERVER
-------------------------------*/
+/* ---------------- ANALYTICS ---------------- */
+
+app.get('/analytics', auth, async (req, res) => {
+  try {
+    if (req.user.role !== "Staff") {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const totalTasks = await Task.countDocuments();
+    const completedTasks = await Task.countDocuments({ status: "done" });
+    const pendingTasks = await Task.countDocuments({ status: "pending" });
+
+    const tasksByGroup = await Task.aggregate([
+      { $group: { _id: "$group", count: { $sum: 1 } } }
+    ]);
+
+    const schedulesByGroup = await Schedule.aggregate([
+      { $group: { _id: "$group", count: { $sum: 1 } } }
+    ]);
+
+    res.json({
+      totalTasks,
+      completedTasks,
+      pendingTasks,
+      tasksByGroup,
+      schedulesByGroup
+    });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ---------------- START SERVER ---------------- */
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
